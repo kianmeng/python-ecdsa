@@ -43,6 +43,8 @@ from .curves import (
     BRAINPOOLP320r1,
     BRAINPOOLP384r1,
     BRAINPOOLP512r1,
+    Ed25519,
+    Ed448,
     curves,
 )
 from .ecdsa import (
@@ -1353,6 +1355,71 @@ class OpenSSL(unittest.TestCase):
             "dgst %s -verify t/pubkey.pem -signature t/data.sig3 t/data.txt"
             % mdarg
         )
+
+    OPENSSL_SUPPORTED_TYPES = set()
+    try:
+        if "-rawin" in run_openssl("pkeyutl -help"):
+            OPENSSL_SUPPORTED_TYPES = set(
+                c.lower()
+                for c in run_openssl("list -public-key-methods").split("\n")
+                if not c.startswith("\t") and not c.startswith(" ")
+            )
+    except SubprocessError:
+        pass
+
+    def do_eddsa_test_to_openssl(self, curve):
+        curvename = curve.name.upper()
+
+        if os.path.isdir("t"):
+            shutil.rmtree("t")
+        os.mkdir("t")
+
+        sk = SigningKey.generate(curve=curve)
+        vk = sk.get_verifying_key()
+
+        data = b"data"
+        with open("t/pubkey.der", "wb") as e:
+            e.write(vk.to_der())
+        with open("t/pubkey.pem", "wb") as e:
+            e.write(vk.to_pem())
+
+        sig = sk.sign(data)
+
+        with open("t/data.sig", "wb") as e:
+            e.write(sig)
+        with open("t/data.txt", "wb") as e:
+            e.write(data)
+        with open("t/baddata.txt", "wb") as e:
+            e.write(data + b"corrupt")
+
+        with self.assertRaises(SubprocessError):
+            run_openssl(
+                "pkeyutl -verify -pubin -inkey t/pubkey.pem -rawin "
+                "-in t/baddata.txt -sigfile t/data.sig"
+            )
+        run_openssl(
+            "pkeyutl -verify -pubin -inkey t/pubkey.pem -rawin "
+            "-in t/data.txt -sigfile t/data.sig"
+        )
+
+        # to create a signature:
+        # pkeyutl -sign -inkey t/privkey.pem -out t/data-ossl.sig -rawin -in data.txt
+
+        shutil.rmtree("t")
+
+    @pytest.mark.skipif(
+        "ed25519" not in OPENSSL_SUPPORTED_TYPES,
+        reason="system openssl does not support Ed25519",
+    )
+    def test_to_openssl_ed25519(self):
+        return self.do_eddsa_test_to_openssl(Ed25519)
+
+    @pytest.mark.skipif(
+        "ed448" not in OPENSSL_SUPPORTED_TYPES,
+        reason="system openssl does not support Ed448",
+    )
+    def test_to_openssl_ed448(self):
+        return self.do_eddsa_test_to_openssl(Ed448)
 
 
 class TooSmallCurve(unittest.TestCase):
